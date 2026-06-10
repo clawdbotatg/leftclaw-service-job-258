@@ -5,6 +5,7 @@ import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { EIP712 } from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import { ECDSA } from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 
 import { IUniswapV3Pool } from "./interfaces/IUniswapV3Pool.sol";
 import { ISwapRouter } from "./interfaces/ISwapRouter.sol";
@@ -62,7 +63,7 @@ contract IndexerRegistry is EIP712 {
     // ---------------------------------------------------------------------
 
     bytes32 public constant SETTLEMENT_TYPEHASH = keccak256(
-        "Settlement(address indexer,bytes32 regId,uint32 queryCount,uint256 totalFeeUSDC,uint256 consumerNonce,address consumer)"
+        "Settlement(address indexer,bytes32 regId,uint32 queryCount,uint256 totalFeeUSDC,uint256 consumerNonce,address consumer,uint64 expiry)"
     );
 
     struct Settlement {
@@ -72,6 +73,7 @@ contract IndexerRegistry is EIP712 {
         uint256 totalFeeUSDC;
         uint256 consumerNonce;
         address consumer;
+        uint64 expiry;
     }
 
     // ---------------------------------------------------------------------
@@ -393,6 +395,7 @@ contract IndexerRegistry is EIP712 {
         // Checks
         if (usedNonces[s.consumer][s.consumerNonce]) revert NonceUsed();
         if (s.totalFeeUSDC < MIN_QUERY_FEE * uint256(s.queryCount)) revert FeeTooLow();
+        if (s.expiry != 0 && block.timestamp > s.expiry) revert("Settlement expired");
 
         bytes32 structHash = keccak256(
             abi.encode(
@@ -402,7 +405,8 @@ contract IndexerRegistry is EIP712 {
                 s.queryCount,
                 s.totalFeeUSDC,
                 s.consumerNonce,
-                s.consumer
+                s.consumer,
+                s.expiry
             )
         );
         bytes32 digest = _hashTypedDataV4(structHash);
@@ -671,10 +675,9 @@ contract IndexerRegistry is EIP712 {
     }
 
     /// @dev Compute an on-chain minimum-CLAWD-out floor for `usdcIn`. Tries the 2h TWAP
-    ///      first; on failure falls back to current slot0 price; returns 0 if both fail,
-    ///      meaning the caller's own minClawdOut governs.
+    ///      first; falls back to current slot0 price. Reverts if no price is available so
+    ///      executeBuyback is blocked rather than executed with zero floor protection.
     function _priceFloor(uint256 usdcIn) internal view returns (uint256) {
-        // Try TWAP via observe([TWAP_WINDOW, 0]).
         uint32[] memory secondsAgos = new uint32[](2);
         secondsAgos[0] = uint32(TWAP_WINDOW);
         secondsAgos[1] = 0;
@@ -684,53 +687,33 @@ contract IndexerRegistry is EIP712 {
             int56 tickCumDelta = tickCumulatives[1] - tickCumulatives[0];
             int24 avgTick = int24(tickCumDelta / int56(uint56(TWAP_WINDOW)));
             uint160 sqrtPriceX96 = _sqrtRatioFromTickApprox(avgTick);
-            if (sqrtPriceX96 == 0) return _slot0Floor(usdcIn);
-            return _floorFromSqrtPrice(sqrtPriceX96, usdcIn);
-        } catch {
-            return _slot0Floor(usdcIn);
-        }
-    }
+            if (sqrtPriceX96 != 0) return _floorFromSqrtPrice(sqrtPriceX96, usdcIn);
+        } catch { }
 
-    /// @dev Fall back to the pool's current spot price for the floor.
-    function _slot0Floor(uint256 usdcIn) internal view returns (uint256) {
-        try CLAWD_USDC_V3_POOL.slot0() returns (
-            uint160 sqrtPriceX96, int24, uint16, uint16, uint16, uint8, bool
-        ) {
-            if (sqrtPriceX96 == 0) return 0;
-            return _floorFromSqrtPrice(sqrtPriceX96, usdcIn);
-        } catch {
-            return 0;
-        }
+        // TWAP unavailable — fall back to spot price.
+        (uint160 spot,,,,,,) = CLAWD_USDC_V3_POOL.slot0();
+        require(spot != 0, "No oracle price available");
+        return _floorFromSqrtPrice(spot, usdcIn);
     }
 
     /**
-     * @dev Convert a sqrtPriceX96 into a minimum CLAWD-out floor for `usdcIn` USDC.
+     * @dev Convert sqrtPriceX96 to a minimum CLAWD-out floor for `usdcIn` USDC.
      *
      * Token ordering on Base: USDC (0x8335...) < CLAWD (0x9f86...), so USDC is token0 and
-     * CLAWD is token1. In Uniswap V3, price = (sqrtPriceX96 / 2^96)^2 expresses token1 per
-     * token0 in raw units, i.e. raw CLAWD per raw USDC. Both decimals cancel into the raw
-     * ratio, so:
+     * CLAWD is token1. price = sqrtPriceX96^2 / 2^192 = raw CLAWD per raw USDC.
      *
-     *   clawdOut(raw) = usdcIn(raw) * sqrtPriceX96^2 / 2^192
+     *   clawdOut(raw) = usdcIn * sqrtPriceX96^2 / 2^192
      *
-     * We then apply a 1% safety margin (x99/100) to absorb rounding and minor drift.
-     * Overflow is avoided by splitting the multiplication: sqrtPriceX96 is at most 2^160,
-     * so sqrtPriceX96^2 is at most 2^320 — we therefore stage the math with the
-     * mulDiv-style decomposition (a * b / 2^192) using two >> 96 shifts.
+     * Uses Math.mulDiv (full 512-bit precision via OZ) to avoid overflow and truncation.
+     * Applies a 1% safety margin to absorb rounding and minor price drift.
      */
     function _floorFromSqrtPrice(uint160 sqrtPriceX96, uint256 usdcIn) internal pure returns (uint256) {
-        // priceX96 = sqrtPriceX96^2 / 2^96  (Q96 representation of raw CLAWD per raw USDC)
-        // To avoid overflow on sqrtPriceX96^2 we first reduce one factor by >> 96.
         uint256 sp = uint256(sqrtPriceX96);
-        // ratio = sp^2 >> 192 would lose precision for small prices; instead compute
-        // (sp >> 48)^2 >> 96 to keep within 256 bits while preserving scale.
-        uint256 half = sp >> 48; // <= 2^112
-        uint256 priceQ96 = (half * half) >> 0; // (sp/2^48)^2 = sp^2 / 2^96, this is sp^2 >> 96
-        // priceQ96 now ~ sp^2 / 2^96. CLAWD per USDC (raw) = priceQ96 / 2^96.
-        // clawdOut = usdcIn * priceQ96 / 2^96
-        uint256 out = (usdcIn * priceQ96) >> 96;
-        // 1% safety margin.
-        return out * 99 / 100;
+        // Step 1: usdcIn * sqrtPriceX96 / 2^96 (intermediate, fits 256 bits)
+        uint256 step1 = Math.mulDiv(usdcIn, sp, 1 << 96);
+        // Step 2: step1 * sqrtPriceX96 / 2^96 = usdcIn * sp^2 / 2^192 = raw CLAWD out
+        uint256 out = Math.mulDiv(step1, sp, 1 << 96);
+        return out * 99 / 100; // 1% safety margin
     }
 
     /**
