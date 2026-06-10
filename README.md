@@ -1,83 +1,69 @@
-# 🏗 Scaffold-ETH 2
+# Event Indexer Registry
 
-<h4 align="center">
-  <a href="https://docs.scaffoldeth.io">Documentation</a> |
-  <a href="https://scaffoldeth.io">Website</a>
-</h4>
+A permissionless on-chain registry on Base where indexer agents stake USDC to register `(contract, eventSig)` pairs and consumer agents pay USDC per query via x402. Solves the subgraph cold-start gap for freshly-deployed Base contracts. No admin, no upgradeability.
 
-🧪 An open-source, up-to-date toolkit for building decentralized applications (dapps) on the Ethereum blockchain. It's designed to make it easier for developers to create and deploy smart contracts and build user interfaces that interact with those contracts.
+## Live Deployment
 
-> [!NOTE]
-> 🤖 Scaffold-ETH 2 is AI-ready! It has everything agents need to build on Ethereum. Check `.agents/`, `.claude/`, `.opencode` or `.cursor/` for more info.
+- **Frontend:** *(IPFS URL will be added after deploy)*
+- **Contract:** [0x006835B9faf4f5244f860862809eCAE555f0abC8](https://base.blockscout.com/address/0x006835b9faf4f5244f860862809ecae555f0abc8) on Base
 
-⚙️ Built using NextJS, RainbowKit, Foundry, Wagmi, Viem, and Typescript.
+## Architecture
 
-- ✅ **Contract Hot Reload**: Your frontend auto-adapts to your smart contract as you edit it.
-- 🪝 **[Custom hooks](https://docs.scaffoldeth.io/hooks/)**: Collection of React hooks wrapper around [wagmi](https://wagmi.sh/) to simplify interactions with smart contracts with typescript autocompletion.
-- 🧱 [**Components**](https://docs.scaffoldeth.io/components/): Collection of common web3 components to quickly build your frontend.
-- 🔥 **Burner Wallet & Local Faucet**: Quickly test your application with a burner wallet and local faucet.
-- 🔐 **Integration with Wallet Providers**: Connect to different wallet providers and interact with the Ethereum network.
+### IndexerRegistry.sol
 
-![Debug Contracts tab](https://github.com/scaffold-eth/scaffold-eth-2/assets/55535804/b237af0c-5027-4849-a5c1-2e31495cccb1)
+One ownerless contract handles the full lifecycle:
 
-## Requirements
+- **Indexers** deposit a $1 USDC base stake, then register `(targetContract, eventSigHash, boostStake)` pairs
+- **Consumers** pay per-query fees via signed EIP-712 `Settlement` receipts; the indexer or consumer submits on-chain to settle
+- **Disputes** use a commit-reveal flow — the disputer stakes 25% of the indexer's boost; if the indexer fails to prove log inclusion within 24h, they are slashed
+- **Buyback** — 1% of all query fees accumulate as `buybackReserveUSDC`; anyone can call `executeBuyback()` to swap USDC→CLAWD via Uniswap V3 and burn the CLAWD to `0xdead`
 
-Before you begin, you need to install the following tools:
+### Key constants
 
-- [Node (>= v20.18.3)](https://nodejs.org/en/download/)
-- Yarn ([v1](https://classic.yarnpkg.com/en/docs/install/) or [v2+](https://yarnpkg.com/getting-started/install))
-- [Git](https://git-scm.com/downloads)
+| Parameter | Value |
+|---|---|
+| Minimum base stake | $1 USDC |
+| Minimum query fee | $0.01 USDC |
+| Dispute window | 24h |
+| Boost withdrawal cooldown | 30h |
+| Base stake withdrawal cooldown | 7d |
+| Fee split | 98% indexer, 1% treasury, 1% buyback |
 
-## Quickstart
+## Frontend
 
-To get started with Scaffold-ETH 2, follow the steps below:
+Four pages built with Scaffold-ETH 2 (static IPFS export):
 
-1. Install dependencies if it was skipped in CLI:
+| Route | Description |
+|---|---|
+| `/` | Indexer dashboard — live registrations, stats, your registrations |
+| `/register` | Deposit base stake + register (contract, event) pairs |
+| `/consumers` | How to query indexers; search registrations by (contract, eventSig) |
+| `/disputes` | Open disputes, track deadlines, resolve expired disputes |
 
-```
-cd my-dapp-example
+## Running Locally
+
+```bash
+# Install dependencies
 yarn install
-```
 
-2. Run a local network in the first terminal:
+# Start local chain (fork Base)
+yarn fork --network base
 
-```
-yarn chain
-```
-
-This command starts a local Ethereum network using Foundry. The network runs on your local machine and can be used for testing and development. You can customize the network configuration in `packages/foundry/foundry.toml`.
-
-3. On a second terminal, deploy the test contract:
-
-```
+# Deploy contracts locally
 yarn deploy
-```
 
-This command deploys a test smart contract to the local network. The contract is located in `packages/foundry/contracts` and can be modified to suit your needs. The `yarn deploy` command uses the deploy script located in `packages/foundry/script` to deploy the contract to the network. You can also customize the deploy script.
-
-4. On a third terminal, start your NextJS app:
-
-```
+# Start frontend
 yarn start
 ```
 
-Visit your app on: `http://localhost:3000`. You can interact with your smart contract using the `Debug Contracts` page. You can tweak the app config in `packages/nextjs/scaffold.config.ts`.
+## Client Actions Required
 
-Run smart contract test with `yarn foundry:test`
+The contract is deployed with `TREASURY = 0xcfb32a7d01ca2b4b538c83b2b38656d3502d76ea`. No ownership transfer is needed (ownerless contract).
 
-- Edit your smart contracts in `packages/foundry/contracts`
-- Edit your frontend homepage at `packages/nextjs/app/page.tsx`. For guidance on [routing](https://nextjs.org/docs/app/building-your-application/routing/defining-routes) and configuring [pages/layouts](https://nextjs.org/docs/app/building-your-application/routing/pages-and-layouts) checkout the Next.js documentation.
-- Edit your deployment scripts in `packages/foundry/script`
+## Known Limitations
 
+The `LogInclusionVerifier` (EIP-4788 + Patricia trie proof) is stubbed — disputes can currently only resolve by expiry (24h timeout), not by indexer proof. See `NEXT_STEPS.md` for the full implementation spec.
 
-## Documentation
+## GitHub
 
-Visit our [docs](https://docs.scaffoldeth.io) to learn how to start building with Scaffold-ETH 2.
-
-To know more about its features, check out our [website](https://scaffoldeth.io).
-
-## Contributing to Scaffold-ETH 2
-
-We welcome contributions to Scaffold-ETH 2!
-
-Please see [CONTRIBUTING.MD](https://github.com/scaffold-eth/scaffold-eth-2/blob/main/CONTRIBUTING.md) for more information and guidelines for contributing to Scaffold-ETH 2.
+[clawdbotatg/leftclaw-service-job-258](https://github.com/clawdbotatg/leftclaw-service-job-258)

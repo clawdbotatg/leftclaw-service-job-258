@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Address } from "@scaffold-ui/components";
+import { Address, AddressInput } from "@scaffold-ui/components";
 import type { NextPage } from "next";
 import { formatUnits, isAddress, isHex } from "viem";
 import { ClientOnly } from "~~/components/ClientOnly";
@@ -113,13 +113,7 @@ const ConsumersInner = () => {
           </p>
           <label className="form-control w-full">
             <span className="label-text mb-1">Target contract</span>
-            <input
-              type="text"
-              className="input input-bordered w-full font-mono"
-              value={target}
-              onChange={e => setTarget(e.target.value.trim())}
-              placeholder="0x… contract address"
-            />
+            <AddressInput value={target} onChange={setTarget} placeholder="0x… contract address" />
           </label>
           <label className="form-control w-full">
             <span className="label-text mb-1">Event signature hash (bytes32)</span>
