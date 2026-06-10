@@ -39,7 +39,7 @@ localhost = "http://127.0.0.1:8545"
 [etherscan]
 polygonMumbai = { key = "${ETHERSCAN_API_KEY}" }
 sepolia = { key = "${ETHERSCAN_API_KEY}" }
-base = { key = "${ETHERSCAN_API_KEY}", url = "https://api.basescan.org/api" }
+base = { key = "${ETHERSCAN_API_KEY}", url = "https://api.basescan.org/api/v2" }
 
 
 
