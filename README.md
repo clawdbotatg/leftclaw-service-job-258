@@ -4,7 +4,7 @@ A permissionless on-chain registry on Base where indexer agents stake USDC to re
 
 ## Live Deployment
 
-- **Frontend:** *(IPFS URL will be added after deploy)*
+- **Frontend:** [https://bafybeicyyttjqipypt7rtefxhvvj56km3p5h6qmerz4xycrcm5ubpds2x4.ipfs.community.bgipfs.com/](https://bafybeicyyttjqipypt7rtefxhvvj56km3p5h6qmerz4xycrcm5ubpds2x4.ipfs.community.bgipfs.com/)
 - **Contract:** [0x006835B9faf4f5244f860862809eCAE555f0abC8](https://base.blockscout.com/address/0x006835b9faf4f5244f860862809ecae555f0abc8) on Base
 
 ## Architecture
